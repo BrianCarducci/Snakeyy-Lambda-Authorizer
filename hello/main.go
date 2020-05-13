@@ -7,7 +7,9 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
@@ -15,6 +17,9 @@ import (
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/secretsmanager"
+
+	"github.com/go-redis/redis/v7"
+	uuid "github.com/satori/go.uuid"
 )
 
 // Response is of type APIGatewayProxyResponse since we're leveraging the
@@ -23,7 +28,73 @@ import (
 // https://serverless.com/framework/docs/providers/aws/events/apigateway/#lambda-proxy-integration
 var response events.APIGatewayProxyResponse
 
+type TokenResponse struct {
+	AccessToken string `json:"access_token"`
+}
+
 func Handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+
+	redisClient := redis.NewClient(&redis.Options{
+		Addr: os.Getenv("ELASTICACHE_ENDPOINT"),
+		Password: "",
+		DB: 0,
+	})
+
+	// Get state from query params if exists
+	rawCookies := request.Headers["Cookie"]
+	if rawCookies != "" {
+		trimmedCookies := strings.ReplaceAll(rawCookies, " ", "")
+		cookiesSlice := strings.Split(trimmedCookies, ";")
+		cookiesSlice = cookiesSlice[:len(cookiesSlice)-1]
+		incomingState := ""
+		for _, cookie := range cookiesSlice {
+			if strings.Contains(cookie, "state=") {
+				incomingState = strings.TrimSuffix(strings.TrimPrefix(cookie, "state="), ";")
+				break
+			}
+		} 
+		if incomingState == "" {
+			newState := uuid.NewV4()
+			err := redisClient.Set(newState.String(), newState.String(), time.Minute).Err()
+			if err != nil {
+				fmt.Println("Failed to add state to redis: " + err.Error())
+					return events.APIGatewayProxyResponse{
+					StatusCode: 500,
+					Body: "Failed to add state to redis: " + err.Error(),
+				}, nil
+			}
+			// Send state back to user as cookie and redirect user to log in to instagram
+			instaAuthorizeReqData := url.Values{}
+			instaAuthorizeReqData.Add("client_id", "270736967654851")
+			instaAuthorizeReqData.Add("redirect_uri", "https://2afo5m8bll.execute-api.us-east-1.amazonaws.com/dev/hello/")
+			instaAuthorizeReqData.Add("scope", "user_profile,user_media")
+			instaAuthorizeReqData.Add("response_type", "code")
+			return events.APIGatewayProxyResponse{
+				StatusCode: 301,
+				Headers: map[string]string{
+					"Location": "https://api.instagram.com/oauth/authorize?" + instaAuthorizeReqData.Encode(),
+					"Set-Cookie": "state="+newState.String()+";",
+				},
+			}, nil
+		}
+
+		// else, incoming state exists, so check with redis
+		err := redisClient.Get(incomingState).Err()
+		if err != nil {
+			fmt.Println("State: " + incomingState + "Not found in redis. Err: " + err.Error())
+			return events.APIGatewayProxyResponse{
+				StatusCode: 400,
+				Body: "State: " + incomingState + "Not found in redis. Err: " + err.Error(),
+			}, nil
+		}
+	} else {
+		fmt.Println("No cookies")
+		return events.APIGatewayProxyResponse{
+			StatusCode: 400,
+			Body: "No cookies",
+		}, nil
+	}
+
 	fmt.Println("Received body: ", request.Body)
 
 	code := request.QueryStringParameters["code"]
@@ -80,11 +151,28 @@ func Handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRespo
 			Body: "Failed to read token response body: " + err.Error(),
 		}, nil
 	}
+	tokenResponse := TokenResponse{}
+	if err := json.Unmarshal(tokenResBody, &tokenResponse); err != nil {
+		fmt.Println("Failed to unmarshal token response: " + err.Error())
+		return events.APIGatewayProxyResponse{
+			StatusCode: 500,
+			Body: "Failed to unmarshal token response: " + err.Error(),
+		}, nil
+	}
 
 	return events.APIGatewayProxyResponse{
 		StatusCode: 200,
 		Body: string(tokenResBody),
 	}, nil
+
+	// return events.APIGatewayProxyResponse{
+	// 	StatusCode: 301,
+	// 	Headers: map[string]string{
+	// 		"Location": "https://snakeyy-5a5bb.firebaseapp.com",
+	// 		"Set-Cookie": "token="+tokenResponse.AccessToken+";",
+	// 	},
+	// 	Body: string(tokenResBody),
+	// }, nil
 }
 
 func main() {
