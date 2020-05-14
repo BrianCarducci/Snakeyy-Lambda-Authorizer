@@ -67,7 +67,9 @@ func Handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRespo
 		}, nil
 	}
 	// else, incoming state exists, so check with redis
+	fmt.Println("Before redis query")
 	err := redisClient.Get(incomingState).Err()
+	fmt.Println("after redis query")
 	if err != nil {
 		fmt.Println("State: " + incomingState + "Not found in redis. Err: " + err.Error())
 		return events.APIGatewayProxyResponse{
@@ -75,12 +77,11 @@ func Handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRespo
 			Body: "State: " + incomingState + "Not found in redis. Err: " + err.Error(),
 		}, nil
 	}
+	fmt.Println("after redis err check")
 
 	fmt.Println("Received body: ", request.Body)
 
 	code := request.QueryStringParameters["code"]
-	fmt.Println("code: " + code)
-
 	if code == "" {
 		fmt.Println("No authorization code supplied")
 		return events.APIGatewayProxyResponse{
@@ -88,6 +89,8 @@ func Handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRespo
 			Body: "No authorization code supplied",
 		}, nil
 	}
+
+	fmt.Println("before secret check")
 
 	secret, err := getSecretByName("SNAKEYY_CLIENT_SECRET")
 	if err != nil {
@@ -98,12 +101,16 @@ func Handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRespo
 		}, nil
 	}
 
+	fmt.Println("after secret check")
+
 	form := url.Values{}
 	form.Add("code", code)
 	form.Add("client_id", "270736967654851")
 	form.Add("client_secret", secret)
 	form.Add("grant_type", "authorization_code")
 	form.Add("redirect_uri", "https://2afo5m8bll.execute-api.us-east-1.amazonaws.com/dev/hello/")
+
+	fmt.Println("Before token req assemble")
 	
 	tokenReq, err := http.NewRequest("POST", "https://api.instagram.com/oauth/access_token", strings.NewReader(form.Encode()))
 	if err != nil {
@@ -115,6 +122,10 @@ func Handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRespo
 	}
 	tokenReq.Header.Add("Content-Type", "application/x-www-form-urlencoded")
 
+	fmt.Println("after token req assemble")
+
+	fmt.Println("before token req")
+
 	tokenRes, err := http.DefaultClient.Do(tokenReq)
 	if err != nil {
 		fmt.Println("Error occurred in making token request: " + err.Error())
@@ -124,6 +135,10 @@ func Handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRespo
 		}, nil
 	}
 
+	fmt.Println("after token req")
+
+	fmt.Println("before read token res body")
+
 	tokenResBody, err := ioutil.ReadAll(tokenRes.Body)
 	if err != nil {
 		fmt.Println("Failed to read token response body: " + err.Error())
@@ -132,6 +147,11 @@ func Handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRespo
 			Body: "Failed to read token response body: " + err.Error(),
 		}, nil
 	}
+
+	fmt.Println("after read token res body")
+
+	fmt.Println("before unmarshal token res body")
+
 	tokenResponse := TokenResponse{}
 	if err := json.Unmarshal(tokenResBody, &tokenResponse); err != nil {
 		fmt.Println("Failed to unmarshal token response: " + err.Error())
@@ -140,6 +160,10 @@ func Handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRespo
 			Body: "Failed to unmarshal token response: " + err.Error(),
 		}, nil
 	}
+
+	fmt.Println("after unmarshal token res body")
+
+	fmt.Println("before final res")
 
 	return events.APIGatewayProxyResponse{
 		StatusCode: 200,
