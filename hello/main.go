@@ -40,58 +40,39 @@ func Handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRespo
 		DB: 0,
 	})
 
-	// Get state from query params if exists
-	rawCookies := request.Headers["Cookie"]
-	if rawCookies != "" {
-		trimmedCookies := strings.ReplaceAll(rawCookies, " ", "")
-		cookiesSlice := strings.Split(trimmedCookies, ";")
-		cookiesSlice = cookiesSlice[:len(cookiesSlice)-1]
-		incomingState := ""
-		for _, cookie := range cookiesSlice {
-			if strings.Contains(cookie, "state=") {
-				incomingState = strings.TrimSuffix(strings.TrimPrefix(cookie, "state="), ";")
-				break
-			}
-		} 
-		if incomingState == "" {
-			newState := uuid.NewV4()
-			err := redisClient.Set(newState.String(), newState.String(), time.Minute).Err()
-			if err != nil {
-				fmt.Println("Failed to add state to redis: " + err.Error())
-					return events.APIGatewayProxyResponse{
-					StatusCode: 500,
-					Body: "Failed to add state to redis: " + err.Error(),
-				}, nil
-			}
-			// Send state back to user as cookie and redirect user to log in to instagram
-			instaAuthorizeReqData := url.Values{}
-			instaAuthorizeReqData.Add("client_id", "270736967654851")
-			instaAuthorizeReqData.Add("redirect_uri", "https://2afo5m8bll.execute-api.us-east-1.amazonaws.com/dev/hello/")
-			instaAuthorizeReqData.Add("scope", "user_profile,user_media")
-			instaAuthorizeReqData.Add("response_type", "code")
-			return events.APIGatewayProxyResponse{
-				StatusCode: 301,
-				Headers: map[string]string{
-					"Location": "https://api.instagram.com/oauth/authorize?" + instaAuthorizeReqData.Encode(),
-					"Set-Cookie": "state="+newState.String()+";",
-				},
-			}, nil
-		}
-
-		// else, incoming state exists, so check with redis
-		err := redisClient.Get(incomingState).Err()
+	incomingState := request.QueryStringParameters["state"]
+	if incomingState == "" {
+		newState := uuid.NewV4()
+		err := redisClient.Set(newState.String(), newState.String(), time.Minute).Err()
 		if err != nil {
-			fmt.Println("State: " + incomingState + "Not found in redis. Err: " + err.Error())
-			return events.APIGatewayProxyResponse{
-				StatusCode: 400,
-				Body: "State: " + incomingState + "Not found in redis. Err: " + err.Error(),
+			fmt.Println("Failed to add state to redis: " + err.Error())
+				return events.APIGatewayProxyResponse{
+				StatusCode: 500,
+				Body: "Failed to add state to redis: " + err.Error(),
 			}, nil
 		}
-	} else {
-		fmt.Println("No cookies")
+		// Send state back to user as cookie and redirect user to log in to instagram
+		instaAuthorizeReqData := url.Values{}
+		instaAuthorizeReqData.Add("client_id", "270736967654851")
+		instaAuthorizeReqData.Add("redirect_uri", "https://2afo5m8bll.execute-api.us-east-1.amazonaws.com/dev/hello/")
+		instaAuthorizeReqData.Add("scope", "user_profile,user_media")
+		instaAuthorizeReqData.Add("response_type", "code")
+		instaAuthorizeReqData.Add("state", newState.String())
+		return events.APIGatewayProxyResponse{
+			StatusCode: 302,
+			Headers: map[string]string{
+				"Location": "https://api.instagram.com/oauth/authorize?" + instaAuthorizeReqData.Encode(),
+				"Set-Cookie": "state="+newState.String()+";",
+			},
+		}, nil
+	}
+	// else, incoming state exists, so check with redis
+	err := redisClient.Get(incomingState).Err()
+	if err != nil {
+		fmt.Println("State: " + incomingState + "Not found in redis. Err: " + err.Error())
 		return events.APIGatewayProxyResponse{
 			StatusCode: 400,
-			Body: "No cookies",
+			Body: "State: " + incomingState + "Not found in redis. Err: " + err.Error(),
 		}, nil
 	}
 
